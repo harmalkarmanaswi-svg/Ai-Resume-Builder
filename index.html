@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Plainline — ATS-Safe Resume Builder</title>
+<style>
+  :root{
+    --ink:#1c1c1a;
+    --paper:#fbfaf6;
+    --line:#1c1c1a;
+    --accent:#1d6e56;
+    --accent-soft:#e1f5ee;
+    --muted:#6f6e68;
+    --serif:'Source Serif 4','Georgia',serif;
+    --sans:'IBM Plex Sans','Helvetica Neue',Arial,sans-serif;
+    --mono:'IBM Plex Mono',monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--paper);color:var(--ink);font-family:var(--sans);}
+  #root{min-height:100vh;}
+  ::-webkit-scrollbar{width:10px;height:10px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+  ::-webkit-scrollbar-thumb{background:#d8d5cb;border-radius:5px;}
+  ::-webkit-scrollbar-thumb:hover{background:#c4c0b3;}
+
+  input, textarea{
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  input:focus, textarea:focus{
+    outline:none;
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  button{ transition: transform .08s ease, background .15s ease, border-color .15s ease, opacity .15s ease; font-family: var(--sans); }
+  button:active{ transform: scale(0.97); }
+
+  @keyframes fadeIn { from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:translateY(0);} }
+  .fade-in{ animation: fadeIn .25s ease; }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner{
+    display:inline-block; width:13px; height:13px; border:2px solid rgba(255,255,255,0.35);
+    border-top-color:#fff; border-radius:50%; animation: spin .7s linear infinite; vertical-align:-2px; margin-right:6px;
+  }
+
+  @keyframes toastIn { from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:translateY(0);} }
+  .toast{ animation: toastIn .2s ease; }
+
+  .card-hover{ transition: border-color .15s ease, box-shadow .15s ease; }
+  .card-hover:hover{ border-color:#bdb9ac !important; box-shadow: 0 1px 6px rgba(0,0,0,0.04); }
+
+  @media (max-width: 860px){
+    .main-grid{ grid-template-columns: 1fr !important; }
+    .preview-col{ order: 2; }
+    .editor-col{ order: 1; border-right:none !important; border-bottom:1px solid var(--line); }
+  }
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/tabler-icons/2.44.0/iconfont/tabler-icons.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useMemo, useRef } = React;
+
+/* ---------- helpers ---------- */
+const emptyResume = {
+  name: "Jordan Avery",
+  title: "Senior Operations Analyst",
+  email: "jordan.avery@email.com",
+  phone: "(555) 010-2938",
+  location: "Austin, TX",
+  links: "linkedin.com/in/jordanavery",
+  summary: "Operations analyst with 6+ years streamlining supply chain reporting and reducing process costs. Skilled in SQL, Excel modeling, and cross-functional process redesign.",
+  skills: "SQL, Excel (Advanced), Process Improvement, Tableau, Inventory Forecasting, Stakeholder Management, Python, SAP",
+  experience: [
+    {
+      company: "Northbridge Logistics",
+      role: "Operations Analyst",
+      start: "2021",
+      end: "Present",
+      bullets: [
+        "Reduced monthly reporting cycle from 5 days to 1 day by automating data pulls with SQL and Python.",
+        "Identified $340K in annual cost savings through vendor consolidation analysis.",
+        "Built inventory forecasting model adopted across 4 regional warehouses."
+      ]
+    },
+    {
+      company: "Carter & Wells Co.",
+      role: "Business Analyst",
+      start: "2018",
+      end: "2021",
+      bullets: [
+        "Partnered with operations leadership to redesign order fulfillment workflow, cutting errors by 22%.",
+        "Maintained KPI dashboards in Tableau used by 30+ stakeholders weekly."
+      ]
+    }
+  ],
+  education: [
+    { school: "University of Texas at Austin", degree: "B.B.A. in Supply Chain Management", end: "2018" }
+  ]
+};
+
+const STORAGE_KEY = "plainline_resume_v1";
+
+function loadResume(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(raw) return JSON.parse(raw);
+  }catch(e){}
+  return JSON.parse(JSON.stringify(emptyResume));
+}
+
+function saveResume(r){
+  try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(r)); }catch(e){}
+}
+
+// crude ATS-friendliness checker — pure rules, no AI needed
+function runAtsCheck(resume){
+  const issues = [];
+  const passes = [];
+
+  if(!resume.name.trim()) issues.push({lvl:"error", msg:"Missing name."});
+  if(!resume.email.includes("@")) issues.push({lvl:"error", msg:"Email looks invalid — ATS parsers rely on this field."});
+  if(!resume.phone.trim()) issues.push({lvl:"warn", msg:"No phone number listed."});
+
+  if(resume.summary.length < 40) issues.push({lvl:"warn", msg:"Summary is short. Aim for 2–4 sentences with role keywords."});
+  else passes.push("Summary length is solid.");
+
+  const skillCount = resume.skills.split(",").map(s=>s.trim()).filter(Boolean).length;
+  if(skillCount < 6) issues.push({lvl:"warn", msg:`Only ${skillCount} skills listed. ATS keyword matching favors 8–15 relevant skills.`});
+  else passes.push(`${skillCount} skills listed — good keyword coverage.`);
+
+  let totalBullets = 0;
+  resume.experience.forEach(job=>{
+    totalBullets += job.bullets.filter(b=>b.trim()).length;
+    job.bullets.forEach(b=>{
+      if(b.trim() && !/\d/.test(b)) {
+        // not an error, just a tip
+      }
+    });
+  });
+  if(totalBullets === 0) issues.push({lvl:"error", msg:"No experience bullet points found."});
+  const numericBullets = resume.experience.flatMap(j=>j.bullets).filter(b=>/\d/.test(b)).length;
+  if(totalBullets > 0 && numericBullets / totalBullets < 0.3){
+    issues.push({lvl:"warn", msg:"Few bullets contain numbers. Quantified results parse and score better."});
+  } else if(totalBullets>0) {
+    passes.push("Good use of quantified achievements.");
+  }
+
+  if(resume.education.length === 0) issues.push({lvl:"warn", msg:"No education listed."});
+  else passes.push("Education section present.");
+
+  passes.push("Single-column layout with standard section headers — fully machine-readable.");
+  passes.push("Standard fonts only, no tables, icons, or text boxes — safe for all major ATS platforms.");
+
+  return { issues, passes };
+}
+
+/* ---------- AI calls via window AI proxy ---------- */
+async function callClaude(promptText){
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 1000,
+      messages: [{ role: "user", content: promptText }]
+    })
+  });
+  const data = await response.json();
+  const text = (data.content || []).map(b => b.text || "").join("\n");
+  return text;
+}
+
+/* ---------- small UI atoms ---------- */
+function Field({label, value, onChange, mono, placeholder, hint}){
+  return (
+    <label style={{display:"block", marginBottom:"16px"}}>
+      <span style={{display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:"5px"}}>
+        <span style={{fontSize:"11px", letterSpacing:"0.08em", textTransform:"uppercase", color:"var(--muted)", fontWeight:500}}>{label}</span>
+        {hint && <span style={{fontSize:"11px", color:"var(--muted)"}}>{hint}</span>}
+      </span>
+      <input
+        value={value}
+        placeholder={placeholder}
+        onChange={e=>onChange(e.target.value)}
+        style={{
+          width:"100%", padding:"10px 12px", border:"1px solid #d8d5cb",
+          background:"#fff", fontFamily: mono ? "var(--mono)" : "var(--sans)",
+          fontSize:"14px", borderRadius:"4px"
+        }}
+      />
+    </label>
+  );
+}
+
+function TextArea({label, value, onChange, rows=3, placeholder, counter}){
+  return (
+    <label style={{display:"block", marginBottom:"16px"}}>
+      <span style={{display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:"5px"}}>
+        <span style={{fontSize:"11px", letterSpacing:"0.08em", textTransform:"uppercase", color:"var(--muted)", fontWeight:500}}>{label}</span>
+        {counter && <span style={{fontSize:"11px", color:"var(--muted)"}}>{value.length} chars</span>}
+      </span>
+      <textarea
+        value={value}
+        placeholder={placeholder}
+        rows={rows}
+        onChange={e=>onChange(e.target.value)}
+        style={{
+          width:"100%", padding:"10px 12px", border:"1px solid #d8d5cb",
+          background:"#fff", fontFamily:"var(--sans)", fontSize:"14px",
+          borderRadius:"4px", resize:"vertical", lineHeight:1.55
+        }}
+      />
+    </label>
+  );
+}
+
+/* ---------- Toast ---------- */
+function Toast({message, onClose}){
+  React.useEffect(()=>{
+    const t = setTimeout(onClose, 2400);
+    return ()=>clearTimeout(t);
+  }, [message]);
+  if(!message) return null;
+  return (
+    <div className="toast" style={{
+      position:"fixed", bottom:"24px", left:"50%", transform:"translateX(-50%)",
+      background:"var(--ink)", color:"#fff", padding:"11px 20px", borderRadius:"5px",
+      fontSize:"13px", fontWeight:500, zIndex:1000, boxShadow:"0 4px 16px rgba(0,0,0,0.18)",
+      display:"flex", alignItems:"center", gap:"8px"
+    }}>
+      <i className="ti ti-check" style={{fontSize:"16px", color:"#7ee0c4"}} aria-hidden="true"></i>
+      {message}
+    </div>
+  );
+}
+
+/* ---------- Score ring ---------- */
+function ScoreRing({score, size=64, label}){
+  const r = (size-8)/2;
+  const circ = 2*Math.PI*r;
+  const offset = circ - (score/100)*circ;
+  const color = score>=80 ? "#1d6e56" : score>=50 ? "#a36a00" : "#b3261e";
+  return (
+    <div style={{display:"flex", alignItems:"center", gap:"14px"}}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{transform:"rotate(-90deg)", flexShrink:0}}>
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#e8e5dc" strokeWidth="6" />
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth="6"
+          strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round"
+          style={{transition:"stroke-dashoffset .5s ease"}} />
+      </svg>
+      <div>
+        <div style={{fontFamily:"var(--serif)", fontSize:"28px", fontWeight:600, lineHeight:1, color}}>{score}</div>
+        {label && <div style={{fontSize:"12px", color:"var(--muted)", marginTop:"2px"}}>{label}</div>}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Section card wrapper (collapsible) ---------- */
+function SectionCard({title, icon, defaultOpen=true, children, badge}){
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="card-hover" style={{border:"1px solid #e3e0d6", borderRadius:"6px", marginBottom:"14px", background:"#fff", overflow:"hidden"}}>
+      <button
+        onClick={()=>setOpen(!open)}
+        style={{
+          width:"100%", display:"flex", alignItems:"center", justifyContent:"space-between",
+          padding:"13px 16px", background:"transparent", border:"none", cursor:"pointer", textAlign:"left"
+        }}
+      >
+        <span style={{display:"flex", alignItems:"center", gap:"10px", fontFamily:"var(--serif)", fontSize:"15px", fontWeight:600}}>
+          {icon && <i className={`ti ti-${icon}`} style={{fontSize:"17px", color:"var(--accent)"}} aria-hidden="true"></i>}
+          {title}
+          {badge}
+        </span>
+        <i className={`ti ti-chevron-${open ? "up" : "down"}`} style={{fontSize:"17px", color:"var(--muted)"}} aria-hidden="true"></i>
+      </button>
+      {open && <div className="fade-in" style={{padding:"4px 16px 16px 16px"}}>{children}</div>}
+    </div>
+  );
+}
+
+
+function ResumePreview({resume}){
+  const skills = resume.skills.split(",").map(s=>s.trim()).filter(Boolean);
+  return (
+    <div style={{
+      background:"#fff", border:"1px solid var(--line)", padding:"40px 44px",
+      fontFamily:"var(--sans)", fontSize:"13px", lineHeight:1.55, color:"#1c1c1a",
+      maxWidth:"680px", margin:"0 auto"
+    }}>
+      <div style={{borderBottom:"2px solid var(--ink)", paddingBottom:"10px", marginBottom:"14px"}}>
+        <h1 style={{fontFamily:"var(--serif)", fontSize:"26px", fontWeight:600, margin:0}}>{resume.name || "Your Name"}</h1>
+        <div style={{fontSize:"14px", color:"var(--accent)", fontWeight:500, marginTop:"2px"}}>{resume.title}</div>
+        <div style={{fontSize:"12px", color:"var(--muted)", marginTop:"6px"}}>
+          {[resume.email, resume.phone, resume.location, resume.links].filter(Boolean).join("  •  ")}
+        </div>
+      </div>
+
+      {resume.summary && (
+        <Section title="Summary">
+          <p style={{margin:0}}>{resume.summary}</p>
+        </Section>
+      )}
+
+      {skills.length > 0 && (
+        <Section title="Skills">
+          <p style={{margin:0}}>{skills.join("  •  ")}</p>
+        </Section>
+      )}
+
+      {resume.experience.length > 0 && (
+        <Section title="Experience">
+          {resume.experience.map((job,i)=>(
+            <div key={i} style={{marginBottom: i < resume.experience.length-1 ? "12px" : 0}}>
+              <div style={{display:"flex", justifyContent:"space-between", fontWeight:600}}>
+                <span>{job.role}{job.company ? `, ${job.company}` : ""}</span>
+                <span style={{fontWeight:400, color:"var(--muted)", fontSize:"12px"}}>{job.start} – {job.end}</span>
+              </div>
+              <ul style={{margin:"4px 0 0 0", paddingLeft:"18px"}}>
+                {job.bullets.filter(b=>b.trim()).map((b,j)=>(<li key={j} style={{marginBottom:"2px"}}>{b}</li>))}
+              </ul>
+            </div>
+          ))}
+        </Section>
+      )}
+
+      {resume.education.length > 0 && (
+        <Section title="Education">
+          {resume.education.map((ed,i)=>(
+            <div key={i} style={{display:"flex", justifyContent:"space-between"}}>
+              <span><strong>{ed.degree}</strong>{ed.school ? `, ${ed.school}` : ""}</span>
+              <span style={{color:"var(--muted)", fontSize:"12px"}}>{ed.end}</span>
+            </div>
+          ))}
+        </Section>
+      )}
+    </div>
+  );
+}
+
+function Section({title, children}){
+  return (
+    <div style={{marginBottom:"14px"}}>
+      <div style={{
+        fontSize:"11px", letterSpacing:"0.12em", textTransform:"uppercase",
+        fontWeight:600, color:"var(--ink)", borderBottom:"1px solid var(--ink)",
+        paddingBottom:"3px", marginBottom:"6px"
+      }}>{title}</div>
+      {children}
+    </div>
+  );
+}
+
+/* ---------- ATS check panel ---------- */
+function AtsPanel({resume}){
+  const {issues, passes} = useMemo(()=>runAtsCheck(resume), [resume]);
+  const errors = issues.filter(i=>i.lvl==="error");
+  const warns = issues.filter(i=>i.lvl==="warn");
+  const score = Math.max(0, 100 - errors.length*20 - warns.length*8);
+
+  return (
+    <div className="fade-in">
+      <div style={{
+        background:"#fff", border:"1px solid #e3e0d6", borderRadius:"6px",
+        padding:"18px 20px", marginBottom:"16px", display:"flex", alignItems:"center", justifyContent:"space-between"
+      }}>
+        <ScoreRing score={score} label="ATS compatibility" />
+        <div style={{textAlign:"right"}}>
+          <div style={{fontSize:"13px", color:"var(--muted)"}}>{errors.length} errors • {warns.length} warnings</div>
+          <div style={{fontSize:"13px", color:"var(--accent)", fontWeight:500, marginTop:"2px"}}>{passes.length} checks passed</div>
+        </div>
+      </div>
+
+      {issues.length === 0 ? (
+        <div style={{
+          display:"flex", alignItems:"center", gap:"10px", padding:"14px 16px",
+          background:"var(--accent-soft)", borderRadius:"6px", marginBottom:"16px", color:"var(--accent)"
+        }}>
+          <i className="ti ti-circle-check" style={{fontSize:"20px"}} aria-hidden="true"></i>
+          <span style={{fontSize:"13px", fontWeight:500}}>No issues found — this resume is in great shape.</span>
+        </div>
+      ) : (
+        <div style={{marginBottom:"16px"}}>
+          {issues.map((it,i)=>(
+            <div key={i} style={{
+              display:"flex", gap:"10px", fontSize:"13px", padding:"11px 14px", marginBottom:"8px",
+              borderRadius:"6px", alignItems:"flex-start",
+              border: `1px solid ${it.lvl==="error" ? "#f3c7c4" : "#f3ddb0"}`,
+              background: it.lvl==="error" ? "#fbeceb" : "#fdf6e7"
+            }}>
+              <i className={`ti ti-${it.lvl==="error" ? "alert-circle" : "alert-triangle"}`}
+                 style={{fontSize:"17px", color: it.lvl==="error" ? "#b3261e" : "#a36a00", flexShrink:0, marginTop:"1px"}} aria-hidden="true"></i>
+              <span>{it.msg}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div>
+        <div style={{fontSize:"11px", textTransform:"uppercase", letterSpacing:"0.08em", color:"var(--muted)", marginBottom:"8px", fontWeight:500}}>Passing checks</div>
+        {passes.map((p,i)=>(
+          <div key={i} style={{display:"flex", gap:"10px", alignItems:"flex-start", fontSize:"13px", marginBottom:"7px"}}>
+            <i className="ti ti-check" style={{fontSize:"16px", color:"var(--accent)", flexShrink:0, marginTop:"2px"}} aria-hidden="true"></i>
+            <span>{p}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- AI panels ---------- */
+function AiOptimizer({resume, setResume, notify}){
+  const [jobDesc, setJobDesc] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+
+  async function analyze(){
+    setLoading(true); setError(null); setResult(null);
+    const prompt = `You are an ATS resume optimization assistant. Compare the resume below against the job description and respond ONLY with valid JSON (no markdown fences, no preamble) in this exact shape:
+{
+  "match_score": <integer 0-100>,
+  "missing_keywords": [<strings, max 10>],
+  "summary_rewrite": "<a rewritten 2-3 sentence professional summary tailored to this job, incorporating missing keywords naturally>",
+  "bullet_suggestions": [<3 to 5 strings, each a rewritten or new resume bullet point using strong action verbs and quantified impact, tailored to this job>]
+}
+
+RESUME:
+Name: ${resume.name}
+Title: ${resume.title}
+Summary: ${resume.summary}
+Skills: ${resume.skills}
+Experience:
+${resume.experience.map(j=>`${j.role} at ${j.company} (${j.start}-${j.end}):\n${j.bullets.join("\n")}`).join("\n\n")}
+
+JOB DESCRIPTION:
+${jobDesc}`;
+
+    try{
+      const text = await callClaude(prompt);
+      const cleaned = text.replace(/```json|```/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+      setResult(parsed);
+    }catch(e){
+      setError("Couldn't analyze right now. Try again in a moment.");
+    }finally{
+      setLoading(false);
+    }
+  }
+
+  function applySummary(){
+    setResume({...resume, summary: result.summary_rewrite});
+    notify("Summary updated");
+  }
+  function addKeywordsToSkills(){
+    const existing = resume.skills.split(",").map(s=>s.trim().toLowerCase());
+    const toAdd = result.missing_keywords.filter(k=>!existing.includes(k.toLowerCase()));
+    const merged = [resume.skills.trim().replace(/,$/,""), ...toAdd].filter(Boolean).join(", ");
+    setResume({...resume, skills: merged});
+    notify("Keywords added to skills");
+  }
+
+  return (
+    <div className="fade-in">
+      <div style={{background:"#fff", border:"1px solid #e3e0d6", borderRadius:"6px", padding:"16px"}}>
+        <div style={{display:"flex", alignItems:"center", gap:"8px", marginBottom:"10px"}}>
+          <i className="ti ti-target-arrow" style={{fontSize:"18px", color:"var(--accent)"}} aria-hidden="true"></i>
+          <span style={{fontFamily:"var(--serif)", fontSize:"15px", fontWeight:600}}>Tailor to a job</span>
+        </div>
+        <TextArea label="Target job description" value={jobDesc} onChange={setJobDesc} rows={6} placeholder="Paste the full job posting here..." />
+        <button
+          onClick={analyze}
+          disabled={loading || !jobDesc.trim()}
+          style={{
+            background:"var(--ink)", color:"#fff", border:"none", padding:"10px 18px",
+            fontSize:"13px", fontWeight:500, cursor:"pointer", borderRadius:"4px",
+            opacity: (loading || !jobDesc.trim()) ? 0.45 : 1,
+            display:"inline-flex", alignItems:"center"
+          }}
+        >{loading ? <><span className="spinner"></span>Analyzing...</> : <><i className="ti ti-sparkles" style={{fontSize:"15px", marginRight:"6px"}} aria-hidden="true"></i>Analyze match</>}</button>
+      </div>
+
+      {error && (
+        <div style={{display:"flex", gap:"10px", alignItems:"center", padding:"11px 14px", marginTop:"12px", borderRadius:"6px", border:"1px solid #f3c7c4", background:"#fbeceb", fontSize:"13px", color:"#b3261e"}}>
+          <i className="ti ti-alert-circle" style={{fontSize:"17px"}} aria-hidden="true"></i>{error}
+        </div>
+      )}
+
+      {!result && !loading && !error && (
+        <div style={{textAlign:"center", padding:"40px 20px", color:"var(--muted)"}}>
+          <i className="ti ti-clipboard-search" style={{fontSize:"32px", marginBottom:"10px", display:"block"}} aria-hidden="true"></i>
+          <p style={{fontSize:"13px", margin:0}}>Paste a job description above to see how well your resume matches —<br/>and get AI-tailored suggestions.</p>
+        </div>
+      )}
+
+      {result && (
+        <div className="fade-in" style={{marginTop:"16px"}}>
+          <div style={{background:"#fff", border:"1px solid #e3e0d6", borderRadius:"6px", padding:"16px 20px", marginBottom:"14px"}}>
+            <ScoreRing score={result.match_score} label="keyword match with this job" />
+          </div>
+
+          {result.missing_keywords && result.missing_keywords.length > 0 && (
+            <SectionCard title="Missing keywords" icon="key">
+              <div style={{display:"flex", flexWrap:"wrap", gap:"6px", marginBottom:"10px"}}>
+                {result.missing_keywords.map((k,i)=>(
+                  <span key={i} style={{background:"var(--accent-soft)", color:"var(--accent)", fontSize:"12px", padding:"4px 10px", borderRadius:"12px", fontWeight:500}}>{k}</span>
+                ))}
+              </div>
+              <button onClick={addKeywordsToSkills} style={{fontSize:"12px", padding:"7px 14px", border:"1px solid #d8d5cb", background:"#fff", borderRadius:"4px", cursor:"pointer", display:"inline-flex", alignItems:"center", gap:"6px"}}>
+                <i className="ti ti-plus" style={{fontSize:"14px"}} aria-hidden="true"></i>Add to my skills
+              </button>
+            </SectionCard>
+          )}
+
+          {result.summary_rewrite && (
+            <SectionCard title="Tailored summary" icon="file-text">
+              <p style={{fontSize:"13px", background:"var(--paper)", border:"1px solid #e3e0d6", padding:"12px", borderRadius:"4px", margin:"0 0 10px 0", lineHeight:1.6}}>{result.summary_rewrite}</p>
+              <button onClick={applySummary} style={{fontSize:"12px", padding:"7px 14px", border:"1px solid #d8d5cb", background:"#fff", borderRadius:"4px", cursor:"pointer", display:"inline-flex", alignItems:"center", gap:"6px"}}>
+                <i className="ti ti-replace" style={{fontSize:"14px"}} aria-hidden="true"></i>Use this summary
+              </button>
+            </SectionCard>
+          )}
+
+          {result.bullet_suggestions && result.bullet_suggestions.length > 0 && (
+            <SectionCard title="Suggested bullet points" icon="list-details">
+              <ul style={{paddingLeft:"18px", fontSize:"13px", margin:0, lineHeight:1.7}}>
+                {result.bullet_suggestions.map((b,i)=>(<li key={i} style={{marginBottom:"4px"}}>{b}</li>))}
+              </ul>
+              <p style={{fontSize:"12px", color:"var(--muted)", marginTop:"10px", marginBottom:0}}>Copy any of these into your experience bullets on the left.</p>
+            </SectionCard>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- main app ---------- */
+function App(){
+  const [resume, setResumeRaw] = useState(loadResume);
+  const [tab, setTab] = useState("edit"); // edit | ats | ai
+  const [toast, setToast] = useState(null);
+
+  function notify(msg){ setToast(msg); }
+
+  function setResume(r){
+    setResumeRaw(r);
+    saveResume(r);
+  }
+
+  function updateField(key, value){
+    setResume({...resume, [key]: value});
+  }
+
+  function updateJob(idx, key, value){
+    const exp = resume.experience.map((j,i)=> i===idx ? {...j, [key]: value} : j);
+    setResume({...resume, experience: exp});
+  }
+  function updateBullet(jobIdx, bIdx, value){
+    const exp = resume.experience.map((j,i)=>{
+      if(i!==jobIdx) return j;
+      const bullets = j.bullets.map((b,k)=> k===bIdx ? value : b);
+      return {...j, bullets};
+    });
+    setResume({...resume, experience: exp});
+  }
+  function addBullet(jobIdx){
+    const exp = resume.experience.map((j,i)=> i===jobIdx ? {...j, bullets:[...j.bullets, ""]} : j);
+    setResume({...resume, experience: exp});
+  }
+  function removeBullet(jobIdx, bIdx){
+    const exp = resume.experience.map((j,i)=>{
+      if(i!==jobIdx) return j;
+      return {...j, bullets: j.bullets.filter((_,k)=>k!==bIdx)};
+    });
+    setResume({...resume, experience: exp});
+  }
+  function addJob(){
+    setResume({...resume, experience:[...resume.experience, {company:"", role:"", start:"", end:"", bullets:[""]}]});
+  }
+  function removeJob(idx){
+    setResume({...resume, experience: resume.experience.filter((_,i)=>i!==idx)});
+    notify("Role removed");
+  }
+  function updateEdu(idx, key, value){
+    const edu = resume.education.map((e,i)=> i===idx ? {...e, [key]: value} : e);
+    setResume({...resume, education: edu});
+  }
+  function addEdu(){
+    setResume({...resume, education:[...resume.education, {school:"", degree:"", end:""}]});
+  }
+  function removeEdu(idx){
+    setResume({...resume, education: resume.education.filter((_,i)=>i!==idx)});
+    notify("Education entry removed");
+  }
+
+  function handlePrint(){
+    window.print();
+  }
+
+  // Completion progress for header
+  const completion = useMemo(()=>{
+    let total = 0, done = 0;
+    const check = (v) => { total++; if(v && v.toString().trim()) done++; };
+    check(resume.name); check(resume.title); check(resume.email); check(resume.phone);
+    check(resume.summary); check(resume.skills);
+    total++; if(resume.experience.some(j=>j.role.trim())) done++;
+    total++; if(resume.education.some(e=>e.degree.trim())) done++;
+    return Math.round((done/total)*100);
+  }, [resume]);
+
+  const tabs = [
+    {id:"edit", label:"Edit resume", icon:"edit"},
+    {id:"ats", label:"ATS check", icon:"checklist"},
+    {id:"ai", label:"AI job match", icon:"sparkles"}
+  ];
+
+  return (
+    <div>
+      <style>{`
+        @media print {
+          .no-print { display: none !important; }
+          .print-area { box-shadow:none !important; border:none !important; padding:0 !important; background:#fff !important; }
+          body { background: #fff !important; }
+        }
+      `}</style>
+
+      <Toast message={toast} onClose={()=>setToast(null)} />
+
+      <header className="no-print" style={{
+        borderBottom:"1px solid #e3e0d6", padding:"18px 30px", display:"flex",
+        justifyContent:"space-between", alignItems:"center", position:"sticky", top:0,
+        background:"var(--paper)", zIndex:50, flexWrap:"wrap", gap:"12px"
+      }}>
+        <div style={{display:"flex", alignItems:"center", gap:"12px"}}>
+          <div style={{
+            width:"36px", height:"36px", borderRadius:"7px", background:"var(--ink)",
+            color:"#fff", display:"flex", alignItems:"center", justifyContent:"center",
+            fontFamily:"var(--serif)", fontSize:"17px", fontWeight:600, flexShrink:0
+          }}>P</div>
+          <div>
+            <div style={{fontFamily:"var(--serif)", fontSize:"19px", fontWeight:600, letterSpacing:"-0.01em", lineHeight:1.2}}>Plainline</div>
+            <div style={{fontSize:"12px", color:"var(--muted)"}}>ATS-safe resume builder with AI tailoring</div>
+          </div>
+        </div>
+
+        <div style={{display:"flex", alignItems:"center", gap:"16px"}}>
+          <div style={{display:"flex", alignItems:"center", gap:"8px"}}>
+            <div style={{width:"90px", height:"6px", background:"#e8e5dc", borderRadius:"3px", overflow:"hidden"}}>
+              <div style={{width:`${completion}%`, height:"100%", background:"var(--accent)", borderRadius:"3px", transition:"width .3s ease"}}></div>
+            </div>
+            <span style={{fontSize:"12px", color:"var(--muted)", whiteSpace:"nowrap"}}>{completion}% complete</span>
+          </div>
+          <button onClick={handlePrint} style={{
+            background:"var(--ink)", color:"#fff", border:"none", padding:"10px 18px",
+            fontSize:"13px", fontWeight:500, cursor:"pointer", borderRadius:"5px",
+            display:"flex", alignItems:"center", gap:"7px", whiteSpace:"nowrap"
+          }}>
+            <i className="ti ti-download" style={{fontSize:"15px"}} aria-hidden="true"></i>
+            Download PDF
+          </button>
+        </div>
+      </header>
+
+      <div className="main-grid" style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:"0", minHeight:"calc(100vh - 75px)"}}>
+        {/* LEFT: editor */}
+        <div className="no-print editor-col" style={{borderRight:"1px solid #e3e0d6", overflowY:"auto"}}>
+          <div style={{
+            display:"flex", borderBottom:"1px solid #e3e0d6", position:"sticky", top:0,
+            background:"var(--paper)", zIndex:10, padding:"0 24px"
+          }}>
+            {tabs.map(t=>(
+              <button key={t.id} onClick={()=>setTab(t.id)} style={{
+                padding:"13px 18px", fontSize:"13px", fontWeight:500, cursor:"pointer",
+                border:"none", borderBottom: tab===t.id ? "2px solid var(--ink)" : "2px solid transparent",
+                background:"transparent", color: tab===t.id ? "var(--ink)" : "var(--muted)",
+                display:"flex", alignItems:"center", gap:"6px", marginBottom:"-1px"
+              }}>
+                <i className={`ti ti-${t.icon}`} style={{fontSize:"15px"}} aria-hidden="true"></i>
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          <div style={{padding:"22px 24px 60px 24px"}}>
+          {tab === "edit" && (
+            <div className="fade-in">
+              <SectionCard title="Contact" icon="id-badge">
+                <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:"0 14px"}}>
+                  <Field label="Full name" value={resume.name} onChange={v=>updateField("name", v)} />
+                  <Field label="Title / target role" value={resume.title} onChange={v=>updateField("title", v)} />
+                  <Field label="Email" value={resume.email} onChange={v=>updateField("email", v)} />
+                  <Field label="Phone" value={resume.phone} onChange={v=>updateField("phone", v)} />
+                  <Field label="Location" value={resume.location} onChange={v=>updateField("location", v)} />
+                  <Field label="Links (LinkedIn, portfolio)" value={resume.links} onChange={v=>updateField("links", v)} />
+                </div>
+              </SectionCard>
+
+              <SectionCard title="Summary" icon="file-text">
+                <TextArea label="Professional summary" value={resume.summary} onChange={v=>updateField("summary", v)} rows={4} counter />
+              </SectionCard>
+
+              <SectionCard title="Skills" icon="bulb">
+                <TextArea label="Skills (comma-separated)" value={resume.skills} onChange={v=>updateField("skills", v)} rows={2} />
+                <div style={{display:"flex", flexWrap:"wrap", gap:"6px", marginTop:"4px"}}>
+                  {resume.skills.split(",").map(s=>s.trim()).filter(Boolean).map((s,i)=>(
+                    <span key={i} style={{fontSize:"12px", padding:"3px 10px", background:"var(--accent-soft)", color:"var(--accent)", borderRadius:"12px", fontWeight:500}}>{s}</span>
+                  ))}
+                </div>
+              </SectionCard>
+
+              <SectionCard title="Experience" icon="briefcase"
+                badge={<span style={{fontSize:"11px", color:"var(--muted)", fontWeight:400}}>({resume.experience.length})</span>}>
+                {resume.experience.map((job, idx)=>(
+                  <div key={idx} style={{border:"1px solid #ebe8de", padding:"14px", marginBottom:"12px", borderRadius:"5px", background:"var(--paper)"}}>
+                    <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"4px"}}>
+                      <span style={{fontSize:"12px", fontWeight:500, color:"var(--muted)"}}>Role {idx+1}</span>
+                      <button onClick={()=>removeJob(idx)} title="Remove role" style={{border:"none", background:"transparent", cursor:"pointer", color:"var(--muted)", padding:"4px", display:"flex"}}>
+                        <i className="ti ti-trash" style={{fontSize:"15px"}} aria-hidden="true"></i>
+                      </button>
+                    </div>
+                    <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:"0 14px"}}>
+                      <Field label="Role" value={job.role} onChange={v=>updateJob(idx,"role",v)} />
+                      <Field label="Company" value={job.company} onChange={v=>updateJob(idx,"company",v)} />
+                      <Field label="Start" value={job.start} onChange={v=>updateJob(idx,"start",v)} />
+                      <Field label="End" value={job.end} onChange={v=>updateJob(idx,"end",v)} />
+                    </div>
+                    <span style={{display:"block", fontSize:"11px", letterSpacing:"0.08em", textTransform:"uppercase", color:"var(--muted)", marginBottom:"6px", fontWeight:500}}>Bullet points</span>
+                    {job.bullets.map((b, bIdx)=>(
+                      <div key={bIdx} style={{display:"flex", gap:"6px", marginBottom:"6px"}}>
+                        <input value={b} onChange={e=>updateBullet(idx,bIdx,e.target.value)}
+                          placeholder="Describe an achievement with a number where possible"
+                          style={{flex:1, padding:"9px 11px", border:"1px solid #d8d5cb", borderRadius:"4px", fontSize:"13px", background:"#fff"}} />
+                        <button onClick={()=>removeBullet(idx,bIdx)} title="Remove bullet" style={{border:"1px solid #d8d5cb", background:"#fff", borderRadius:"4px", cursor:"pointer", padding:"0 10px", display:"flex", alignItems:"center"}}>
+                          <i className="ti ti-x" style={{fontSize:"14px"}} aria-hidden="true"></i>
+                        </button>
+                      </div>
+                    ))}
+                    <button onClick={()=>addBullet(idx)} style={{fontSize:"12px", padding:"7px 12px", border:"1px solid #d8d5cb", background:"#fff", borderRadius:"4px", cursor:"pointer", marginTop:"4px", display:"inline-flex", alignItems:"center", gap:"6px"}}>
+                      <i className="ti ti-plus" style={{fontSize:"13px"}} aria-hidden="true"></i>Add bullet
+                    </button>
+                  </div>
+                ))}
+                <button onClick={addJob} style={{fontSize:"13px", padding:"9px 16px", border:"1px dashed #c4c0b3", background:"transparent", borderRadius:"4px", cursor:"pointer", width:"100%", display:"flex", alignItems:"center", justifyContent:"center", gap:"6px", color:"var(--muted)"}}>
+                  <i className="ti ti-plus" style={{fontSize:"14px"}} aria-hidden="true"></i>Add role
+                </button>
+              </SectionCard>
+
+              <SectionCard title="Education" icon="school"
+                badge={<span style={{fontSize:"11px", color:"var(--muted)", fontWeight:400}}>({resume.education.length})</span>}>
+                {resume.education.map((ed, idx)=>(
+                  <div key={idx} style={{border:"1px solid #ebe8de", padding:"14px", marginBottom:"10px", borderRadius:"5px", background:"var(--paper)"}}>
+                    <div style={{display:"flex", justifyContent:"flex-end", marginBottom:"4px"}}>
+                      <button onClick={()=>removeEdu(idx)} title="Remove" style={{border:"none", background:"transparent", cursor:"pointer", color:"var(--muted)", padding:"4px", display:"flex"}}>
+                        <i className="ti ti-trash" style={{fontSize:"15px"}} aria-hidden="true"></i>
+                      </button>
+                    </div>
+                    <Field label="Degree" value={ed.degree} onChange={v=>updateEdu(idx,"degree",v)} />
+                    <Field label="School" value={ed.school} onChange={v=>updateEdu(idx,"school",v)} />
+                    <Field label="Year" value={ed.end} onChange={v=>updateEdu(idx,"end",v)} />
+                  </div>
+                ))}
+                <button onClick={addEdu} style={{fontSize:"13px", padding:"9px 16px", border:"1px dashed #c4c0b3", background:"transparent", borderRadius:"4px", cursor:"pointer", width:"100%", display:"flex", alignItems:"center", justifyContent:"center", gap:"6px", color:"var(--muted)"}}>
+                  <i className="ti ti-plus" style={{fontSize:"14px"}} aria-hidden="true"></i>Add education
+                </button>
+              </SectionCard>
+            </div>
+          )}
+
+          {tab === "ats" && <AtsPanel resume={resume} />}
+          {tab === "ai" && <AiOptimizer resume={resume} setResume={setResume} notify={notify} />}
+          </div>
+        </div>
+
+        {/* RIGHT: preview */}
+        <div className="print-area preview-col" style={{padding:"30px", background:"#f4f2ec", overflowY:"auto"}}>
+          <div style={{maxWidth:"680px", margin:"0 auto 14px auto"}} className="no-print">
+            <div style={{display:"flex", alignItems:"center", gap:"8px", color:"var(--muted)", fontSize:"12px"}}>
+              <i className="ti ti-eye" style={{fontSize:"15px"}} aria-hidden="true"></i>
+              Live preview — single-column, standard headers, no tables or graphics. Safe for all major ATS parsers.
+            </div>
+          </div>
+          <ResumePreview resume={resume} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
